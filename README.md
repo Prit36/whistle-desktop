@@ -1,6 +1,5 @@
 # Whistle Desktop
 
-[![Windows CI](https://github.com/Prit36/whistle-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/Prit36/whistle-desktop/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/Prit36/whistle-desktop)](https://github.com/Prit36/whistle-desktop/releases/latest)
 
 A native Rust app for private, offline speech to text. Import or drop an MP3, WAV, FLAC, OGG/Vorbis, M4A/AAC or AAC recording, or use your default microphone. Edit confirmed words, copy the transcript, undo clearing it, and export UTF-8 text.
@@ -30,7 +29,7 @@ Setup uses Python's standard library only. It downloads a pinned Whistle model a
 python scripts/package.py --skip-downloads
 ```
 
-This builds both executables, copies the approved runtime and third-party notices, and writes `dist/Whistle-0.1.0-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Update revisions and the runtime manifest deliberately, then rerun validation. Public release builds require a clean tagged checkout; see [RELEASING.md](RELEASING.md).
+This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.1.1-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md). No CI/CD workflows are configured.
 
 ## Use
 

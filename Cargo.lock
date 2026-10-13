@@ -3524,7 +3524,7 @@ dependencies = [
 
 [[package]]
 name = "whistle-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "audioadapter-buffers",

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skip-downloads", action="store_true")
+    parser.add_argument("--skip-downloads", action="store_true", help="Reuse the prepared runtime; Cargo may still fetch build dependencies")
     parser.add_argument("--release", action="store_true", help="Require a clean checkout and an exact version tag")
     args = parser.parse_args()
     version = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
@@ -57,11 +57,26 @@ def main():
                 raise SystemExit(f"Runtime checksum mismatch: {name}. Rerun setup_runtime.py.")
     for name in ["whistle.cact", library, "provenance.json", "NEEDLE-LICENSE.txt", "WHISTLE-LICENSE.txt"]:
         copy(runtime / name, out / "runtime" / name)
-    metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--offline", "--format-version", "1"], cwd=ROOT))
+    compiler = subprocess.check_output(["rustc", "-vV"], text=True)
+    host = next(line.removeprefix("host: ") for line in compiler.splitlines() if line.startswith("host: "))
+    # A build only fills the cache for its host. Metadata must not demand an
+    # offline cache for every other OS; narrow the graph and allow Cargo fetches.
+    metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--filter-platform", host,
+        "--format-version", "1"], cwd=ROOT))
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    included_packages = set()
+    pending = [metadata["resolve"]["root"]]
+    while pending:
+        package_id = pending.pop()
+        if package_id not in included_packages:
+            included_packages.add(package_id)
+            pending.extend(nodes[package_id]["dependencies"])
     notices = out / "third-party"
     notices.mkdir(exist_ok=True)
     index = []
     for package in metadata["packages"]:
+        if package["id"] not in included_packages:
+            continue
         source = Path(package["manifest_path"]).parent
         if source == ROOT:
             continue
