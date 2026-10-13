@@ -10,7 +10,7 @@ The public binary target is Windows x64. Other targets remain source-only until 
 6. Use GitHub CLI to create a draft release with the ZIP and `SHA256SUMS.txt`. Publish the draft after both assets are uploaded successfully.
 7. Download the public assets and verify their checksums and source commit before announcing the release.
 
-There are no CI/CD workflows. GitHub Actions is disabled for this repository. Every release is built, checked and published manually; pushing a commit or tag does not publish anything.
+Every release is built, checked and published manually using GitHub CLI.
 
 The public release should describe platform support, unsigned binary status, microphone latency and unverified hardware. Do not represent synthetic transcription fixtures as a recognition-accuracy benchmark.
 
