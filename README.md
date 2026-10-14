@@ -29,7 +29,7 @@ Setup uses Python's standard library only. It downloads a pinned Whistle model a
 python scripts/package.py --skip-downloads
 ```
 
-This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.2.0-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
+This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.1.4-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
 
 ## Use
 

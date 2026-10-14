@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — 2026-10-14
+## 0.1.4 — 2026-10-14
 
 - Moved the queue control into the header beside Shortcuts as an icon button, with a waiting-count badge, status tooltip, and accessible label.
 - Added folder import with optional subfolders, multiple-file selection, and importing every dropped file/folder or command-line source.

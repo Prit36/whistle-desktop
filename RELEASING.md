@@ -27,7 +27,7 @@ cargo test --locked --test native_engine -- --ignored
 After committing the version changes, publish manually (adjust the version each time):
 
 ```powershell
-$version = "0.2.0"
+$version = "0.1.4"
 $tag = "v$version"
 $repo = "Prit36/whistle-desktop"
 git push --no-follow-tags origin main
