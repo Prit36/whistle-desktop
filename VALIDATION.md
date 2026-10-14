@@ -35,3 +35,9 @@ Reproduce with `python scripts/benchmark.py AUDIO.mp3` or add `--live`. The scri
 - Windows x64 was built and tested. Other platforms have setup support but require their own native build and validation.
 
 The Windows portable bundle includes the pinned model and native runtime, and runs without a Python installation or network connection.
+
+## Interface refinement — 14 October 2026
+
+Seven model-independent UI tests now drive the actual egui widgets with keyboard, pointer, scroll, and worker events. They cover editing/copy/clear/restore; recognition and microphone controls; minimum-size and long-error visibility; Tab/Shift+Tab, F6 and recording shortcuts; processing/cancellation/error recovery; and live text following that respects the user's scroll position, including the final phrase arriving together with completion.
+
+A 1,000-paragraph synthetic transcript exercises Ctrl+End navigation, editing at the end, undo, full-transcript copy, and editor scrolling. This checks editing behavior rather than speech-recognition accuracy. Real MP3 import and native OpenGL capture are also checked for the updated interface. The ordinary suite has 15 tests, plus the separately run native integration test. Physical microphone and OS dialog/clipboard limitations above still apply.

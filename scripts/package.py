@@ -73,6 +73,7 @@ def main():
             pending.extend(nodes[package_id]["dependencies"])
     notices = out / "third-party"
     notices.mkdir(exist_ok=True)
+    copy(ROOT / "assets/Phosphor-LICENSE.txt", notices / "Phosphor-LICENSE.txt")
     index = []
     for package in metadata["packages"]:
         if package["id"] not in included_packages:

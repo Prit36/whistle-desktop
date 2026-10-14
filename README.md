@@ -29,14 +29,15 @@ Setup uses Python's standard library only. It downloads a pinned Whistle model a
 python scripts/package.py --skip-downloads
 ```
 
-This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.1.1-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
+This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.1.2-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
 
 ## Use
 
 - **Open audio file** or drop a recording onto the window. A new source appends below existing text.
-- **Use microphone** captures your OS default input device. Phrases become editable after pauses (about 500 ms of quiet). Continuous speech is split into segments of at most six seconds, followed by inference time. **Stop recording** drains captured audio and transcribes the final phrase.
+- **Record microphone** captures your OS default input device. Phrases become editable after pauses (about 500 ms of quiet). Continuous speech is split into segments of at most six seconds, followed by inference time. **Stop recording** drains captured audio and transcribes the final phrase.
 - Choose automatic language detection or English, German, French, Spanish, Italian, Dutch, or Polish. Whistle currently supports these seven languages; Hindi is not supported by this model.
 - Add names and keywords separated by commas or newlines before starting a source.
+- Audio controls show their shortcuts. Click the keyboard icon in the header for the complete shortcut reference. In narrow windows, **Record microphone** is labeled **Record**.
 - Click the transcript to edit or select text. **Copy text** copies confirmed, edited text. **Export .txt** saves a snapshot through Fastframe's atomic file writer.
 - **Clear** has an **Undo clear** action. Audio and transcript stay in memory until you export text or close the app.
 
@@ -46,6 +47,7 @@ This builds both executables, copies the approved runtime and host dependency no
 | Ctrl+Enter | Start microphone / stop current job |
 | Ctrl+Shift+C | Copy entire transcript |
 | Ctrl+S | Export text |
+| F6 | Focus transcript |
 | Ctrl+C / Ctrl+V / Ctrl+Z | Normal editor selection, paste and undo |
 
 You can also open a file from the command line: `Whistle.exe recording.mp3`. Set `WHISTLE_RUNTIME_DIR` to an explicit runtime directory if needed.
@@ -53,6 +55,7 @@ You can also open a file from the command line: `Whistle.exe recording.mp3`. Set
 ## Performance design
 
 - Native Rust UI with **Fastframe fonts, platform text rendering and atomic files**, using egui/eframe's lightweight OpenGL renderer. No webview or browser runtime.
+- Incoming text follows the bottom of the editor during transcription until you scroll back or focus the editor to edit. Tab and Shift+Tab move between controls; F6 focuses the transcript.
 - A single inference worker owns the native, process-global Whistle C API. The Rust wrapper enforces exclusive engine ownership and is neither `Send` nor `Sync`.
 - The model loads once from a read-only memory map. A fixed JSON output buffer is reused.
 - Symphonia decodes files packet by packet. A persistent Rubato SIMD sinc resampler converts mixed mono audio to 16 kHz, removes startup delay and flushes the exact final sample count.
@@ -76,7 +79,7 @@ cargo build --release --bins
 .\target\release\whistle-cli.exe --check-microphone
 ```
 
-The ordinary tests require no model. The ignored native test requires setup. `--live` feeds a file through the same phrase pipeline as the microphone, without real-time pacing. `--stream` is a diagnostic for the vendor's native streaming API; it was slower than realtime in the Windows test and is not used by the app. `--check-microphone` opens the default input for 250 ms, verifies samples arrived, and stores no audio. Render QA: `whistle-desktop.exe --screenshot preview.png`, or `whistle-desktop.exe recording.mp3 --screenshot preview.png` to capture a completed transcript and exit.
+The ordinary tests require no model. The ignored native test requires setup. `--live` feeds a file through the same phrase pipeline as the microphone, without real-time pacing. `--stream` is a diagnostic for the vendor's native streaming API; it was slower than realtime in the Windows test and is not used by the app. `--check-microphone` opens the default input for 250 ms, verifies samples arrived, and stores no audio. Render QA: `whistle-desktop.exe --screenshot preview.png`, or `whistle-desktop.exe recording.mp3 --screenshot preview.png` to capture a completed transcript and exit. Add `--screenshot-size 820x600` to verify the minimum supported window size. Setup errors can also be captured without waiting for a model to load.
 
 Initial release target: Windows x64. Setup supports the publisher's Windows ARM64, macOS ARM64/x64 and Linux glibc/musl x64/ARM64 libraries through `--tag`; other hosts still require native builds and testing. Protected media, unusual codecs and damaged packets report errors.
 
@@ -87,5 +90,6 @@ Initial release target: Windows x64. Setup supports the publisher's Windows ARM6
 - [Needle native runtime](https://huggingface.co/Cactus-Compute/needle3)
 - [Needle's public ABI wrapper](https://github.com/cactus-compute/needle/blob/3da4261073199444f2e070800854436fbc31fb6a/needle/agent/whistle.py)
 - [Fastframe](https://github.com/crmne/fastframe/tree/b3cb8d04a75c2212aed4e9f950f0e0fdd5208a39)
+- [Phosphor Icons](https://github.com/phosphor-icons/web) (Regular 2.1.2; embedded locally with its MIT license)
 
 Whistle/Needle weights and runtime use Apache-2.0. Fastframe uses MIT; its bundled Inter font uses SIL OFL 1.1. Packaging includes source dependency license files and the publisher's runtime licenses. This project uses MIT.
