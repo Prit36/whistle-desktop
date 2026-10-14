@@ -10,6 +10,7 @@ use std::{
 };
 use whistle_desktop::{
     engine::Options,
+    import::{self, ImportReport},
     worker::{Command, Event, Worker},
 };
 
@@ -34,6 +35,7 @@ mod icons {
     pub const WAVEFORM: &str = "\u{e802}";
     pub const MICROPHONE: &str = "\u{e326}";
     pub const UPLOAD: &str = "\u{e4c0}";
+    pub const FOLDER: &str = "\u{e25a}";
     pub const COPY: &str = "\u{e1ca}";
     pub const DOWNLOAD: &str = "\u{e20c}";
     pub const STOP: &str = "\u{e46c}";
@@ -42,6 +44,7 @@ mod icons {
     pub const CHECK: &str = "\u{e184}";
     pub const WARNING: &str = "\u{e4e2}";
     pub const KEYBOARD: &str = "\u{e2d8}";
+    pub const QUEUE: &str = "\u{e6ac}";
 }
 const LANGUAGES: [(&str, &str); 8] = [
     ("", "Auto detect"),
@@ -58,12 +61,17 @@ const TEXT_LIMIT: usize = 4_000_000;
 #[path = "ui_view.rs"]
 mod view;
 
+#[path = "ui_queue.rs"]
+mod queue;
+use queue::{QueueEntry, QueueStatus};
+
 #[cfg(test)]
 #[path = "ui_tests.rs"]
 mod tests;
 
 enum IoEvent {
-    Picked(Option<PathBuf>),
+    Imported(ImportReport),
+    ImportCancelled,
     Saved(Result<bool, String>),
 }
 
@@ -74,9 +82,11 @@ pub struct WhistleApp {
     listening: bool,
     stopping: bool,
     cancelled: bool,
+    text_limit_reached: bool,
     started: Option<Instant>,
     text: String,
-    undo_clear: Option<String>,
+    undo_clear: Option<(String, usize)>,
+    transcript_sources: usize,
     pending: String,
     follow_append: bool,
     words: usize,
@@ -94,22 +104,29 @@ pub struct WhistleApp {
     dialog: bool,
     screenshot: Option<PathBuf>,
     screenshot_requested: bool,
-    initial_file: Option<PathBuf>,
+    initial_files: Vec<PathBuf>,
+    queue: Vec<QueueEntry>,
+    queue_paused: bool,
+    show_queue: bool,
+    include_subfolders: bool,
+    import_summary: String,
+    import_issues: Vec<String>,
+    context: egui::Context,
 }
 impl WhistleApp {
     pub fn new(
         ctx: &egui::Context,
         screenshot: Option<PathBuf>,
-        initial_file: Option<PathBuf>,
+        initial_files: Vec<PathBuf>,
     ) -> Self {
-        Self::with_worker(ctx, Worker::spawn(ctx.clone()), screenshot, initial_file)
+        Self::with_worker(ctx, Worker::spawn(ctx.clone()), screenshot, initial_files)
     }
 
     fn with_worker(
         ctx: &egui::Context,
         worker: Worker,
         screenshot: Option<PathBuf>,
-        initial_file: Option<PathBuf>,
+        initial_files: Vec<PathBuf>,
     ) -> Self {
         configure_style(ctx);
         let (io_send, io_receive) = mpsc::channel();
@@ -120,9 +137,11 @@ impl WhistleApp {
             listening: false,
             stopping: false,
             cancelled: false,
+            text_limit_reached: false,
             started: None,
             text: String::new(),
             undo_clear: None,
+            transcript_sources: 0,
             pending: String::new(),
             follow_append: false,
             words: 0,
@@ -140,7 +159,14 @@ impl WhistleApp {
             dialog: false,
             screenshot,
             screenshot_requested: false,
-            initial_file,
+            initial_files,
+            queue: Vec::new(),
+            queue_paused: false,
+            show_queue: false,
+            include_subfolders: false,
+            import_summary: String::new(),
+            import_issues: Vec::new(),
+            context: ctx.clone(),
         }
     }
     fn notice(&mut self, text: &str, ctx: &egui::Context) {
@@ -156,8 +182,9 @@ impl WhistleApp {
                 Event::Ready => {
                     self.ready = true;
                     self.error = None;
-                    if let Some(path) = self.initial_file.take() {
-                        self.start(Some(path));
+                    if !self.initial_files.is_empty() {
+                        let paths = std::mem::take(&mut self.initial_files);
+                        self.import_paths(paths);
                     }
                 }
                 Event::Started => {
@@ -176,6 +203,8 @@ impl WhistleApp {
                     } else if !result.text.is_empty() {
                         self.worker.stop.store(true, Ordering::Relaxed);
                         self.stopping = true;
+                        self.queue_paused = true;
+                        self.text_limit_reached = true;
                         self.error = Some("Transcript limit reached (4 MB). Export and clear the text before continuing.".into());
                     }
                     self.pending = result.pending;
@@ -197,12 +226,25 @@ impl WhistleApp {
                     self.seconds = seconds;
                     self.elapsed = elapsed;
                     self.cancelled = cancelled;
+                    let text_limit_reached = self.text_limit_reached;
+                    if let Some(entry) = self.active_entry() {
+                        entry.status = if text_limit_reached {
+                            QueueStatus::Failed("Transcript limit reached; part of this file was not appended. Export and clear the text before retrying.".into())
+                        } else if cancelled {
+                            QueueStatus::Cancelled
+                        } else {
+                            QueueStatus::Done
+                        };
+                    }
                 }
                 Event::Error(error) => {
                     self.busy = false;
                     self.listening = false;
                     self.stopping = false;
                     self.pending.clear();
+                    if let Some(entry) = self.active_entry() {
+                        entry.status = QueueStatus::Failed(error.clone());
+                    }
                     self.error = Some(error);
                 }
             }
@@ -210,23 +252,30 @@ impl WhistleApp {
         while let Ok(event) = self.io_receive.try_recv() {
             self.dialog = false;
             match event {
-                IoEvent::Picked(Some(path)) => self.start(Some(path)),
-                IoEvent::Picked(None) => {}
+                IoEvent::Imported(report) => self.enqueue(report),
+                IoEvent::ImportCancelled => {}
                 IoEvent::Saved(Ok(true)) => {
                     self.toast = Some(("Transcript saved".into(), Instant::now()))
                 }
                 IoEvent::Saved(Ok(false)) => {}
-                IoEvent::Saved(Err(error)) => self.error = Some(error),
+                IoEvent::Saved(Err(error)) => {
+                    self.error = Some(error);
+                    self.queue_paused = true;
+                }
             }
         }
+        self.advance_queue();
     }
-    fn start(&mut self, path: Option<PathBuf>) {
+    fn start(&mut self, path: Option<PathBuf>) -> bool {
         if !self.ready || self.busy || self.dialog {
-            return;
+            return false;
+        }
+        if path.is_none() && self.waiting_count() > 0 {
+            return false;
         }
         if self.text.len() >= TEXT_LIMIT {
             self.error = Some("Export and clear the transcript before continuing.".into());
-            return;
+            return false;
         }
         let keywords = self
             .keywords
@@ -239,7 +288,7 @@ impl WhistleApp {
             Ok(options) => options,
             Err(error) => {
                 self.error = Some(error.to_string());
-                return;
+                return false;
             }
         };
         self.worker.stop.store(false, Ordering::Relaxed);
@@ -257,13 +306,15 @@ impl WhistleApp {
         };
         if self.worker.commands.try_send(command).is_err() {
             self.error = Some("Transcription worker unavailable. Restart the app.".into());
-            return;
+            return false;
         }
         if !self.text.is_empty() {
             self.text.push_str("\n\n");
         }
         self.busy = true;
+        self.transcript_sources += 1;
         self.cancelled = false;
+        self.text_limit_reached = false;
         self.undo_clear = None;
         self.stopping = false;
         self.started = Some(Instant::now());
@@ -272,27 +323,43 @@ impl WhistleApp {
         self.detected.clear();
         self.seconds = 0.0;
         self.elapsed = 0.0;
+        true
     }
     fn stop(&mut self) {
         self.worker.stop.store(true, Ordering::Relaxed);
         self.stopping = true;
+        if self
+            .queue
+            .iter()
+            .any(|entry| entry.status == QueueStatus::Active)
+        {
+            self.queue_paused = true;
+        }
     }
-    fn pick(&mut self, ctx: &egui::Context) {
-        if self.dialog || self.busy || !self.ready {
+    fn pick(&mut self, ctx: &egui::Context, folder: bool) {
+        if self.dialog || !self.ready {
             return;
         }
         self.dialog = true;
         let sender = self.io_send.clone();
         let ctx = ctx.clone();
+        let recursive = self.include_subfolders;
         std::thread::spawn(move || {
-            let path = rfd::FileDialog::new()
-                .set_title("Open audio")
-                .add_filter(
-                    "Audio",
-                    &["mp3", "wav", "flac", "ogg", "opus", "m4a", "aac"],
-                )
-                .pick_file();
-            let _ = sender.send(IoEvent::Picked(path));
+            let paths = if folder {
+                rfd::FileDialog::new()
+                    .set_title("Import audio folder")
+                    .pick_folder()
+                    .map(|path| vec![path])
+            } else {
+                rfd::FileDialog::new()
+                    .set_title("Open audio files")
+                    .add_filter("Audio", import::AUDIO_EXTENSIONS)
+                    .pick_files()
+            };
+            let event = paths.map_or(IoEvent::ImportCancelled, |paths| {
+                IoEvent::Imported(import::discover(paths, recursive))
+            });
+            let _ = sender.send(event);
             ctx.request_repaint();
         });
     }
@@ -304,10 +371,11 @@ impl WhistleApp {
         let sender = self.io_send.clone();
         let ctx = ctx.clone();
         let text = self.text.clone();
+        let file_name = self.export_name();
         std::thread::spawn(move || {
             let result = if let Some(path) = rfd::FileDialog::new()
                 .set_title("Export transcript")
-                .set_file_name("transcript.txt")
+                .set_file_name(file_name)
                 .add_filter("Text", &["txt"])
                 .save_file()
             {
@@ -332,16 +400,20 @@ impl WhistleApp {
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F6)) {
             ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("transcript")));
         }
-        let (open, save, copy, record) = ctx.input_mut(|input| {
+        let (folder, open, save, copy, record) = ctx.input_mut(|input| {
             (
+                input.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::O),
                 input.consume_key(egui::Modifiers::CTRL, egui::Key::O),
                 input.consume_key(egui::Modifiers::CTRL, egui::Key::S),
                 input.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::C),
                 input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter),
             )
         });
+        if folder {
+            self.pick(ctx, true);
+        }
         if open {
-            self.pick(ctx);
+            self.pick(ctx, false);
         }
         if save {
             self.save(ctx);
@@ -352,6 +424,9 @@ impl WhistleApp {
         if record {
             if self.busy {
                 self.stop();
+            } else if self.waiting_count() > 0 {
+                self.queue_paused = false;
+                self.advance_queue();
             } else {
                 self.start(None);
             }
@@ -360,24 +435,27 @@ impl WhistleApp {
             input
                 .raw
                 .dropped_files
-                .first()
+                .iter()
                 .map(|f| f.path().to_path_buf())
+                .collect::<Vec<_>>()
         });
-        if let Some(path) = dropped {
-            self.start(Some(path));
+        if !dropped.is_empty() {
+            self.import_paths(dropped);
         }
     }
 
     fn clear(&mut self) {
         if !self.busy && !self.text.is_empty() {
-            self.undo_clear = Some(std::mem::take(&mut self.text));
+            self.undo_clear = Some((std::mem::take(&mut self.text), self.transcript_sources));
+            self.transcript_sources = 0;
             self.recount();
         }
     }
 
     fn restore_clear(&mut self) {
-        if let Some(text) = self.undo_clear.take() {
+        if let Some((text, sources)) = self.undo_clear.take() {
             self.text = text;
+            self.transcript_sources = sources;
             self.recount();
         }
     }
@@ -391,6 +469,7 @@ impl eframe::App for WhistleApp {
         let ctx = ui.ctx().clone();
         self.handle_input(&ctx);
         self.workspace(ui, &ctx);
+        self.queue_window(&ctx);
         if let Some((message, since)) = &self.toast {
             if since.elapsed() < Duration::from_secs(3) {
                 egui::Area::new("toast".into())
@@ -416,7 +495,12 @@ impl eframe::App for WhistleApp {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         if self.screenshot.is_some() {
-            if !self.screenshot_requested && (self.ready || self.error.is_some()) && !self.busy {
+            if !self.screenshot_requested
+                && (self.ready || self.error.is_some())
+                && !self.busy
+                && !self.dialog
+                && (self.waiting_count() == 0 || self.queue_paused)
+            {
                 self.screenshot_requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
             }

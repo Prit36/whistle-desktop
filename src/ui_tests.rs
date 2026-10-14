@@ -23,7 +23,7 @@ impl Harness {
             stop: Arc::new(AtomicBool::new(false)),
             capture: Arc::new(CaptureStatus::default()),
         };
-        let app = WhistleApp::with_worker(&ctx, worker, None, None);
+        let app = WhistleApp::with_worker(&ctx, worker, None, Vec::new());
         let mut harness = Self {
             ctx,
             app,
@@ -49,6 +49,7 @@ impl Harness {
             |ui| {
                 self.app.handle_input(&ctx);
                 self.app.workspace(ui, &ctx);
+                self.app.queue_window(&ctx);
             },
         );
         // This harness inspects layout and interactions, without a GPU renderer.
@@ -190,7 +191,9 @@ fn minimum_window_keeps_actions_settings_and_error_recovery_visible() {
     let mut harness = Harness::new(Vec2::new(820.0, 600.0));
     let output = harness.frame(vec![]);
     for label in [
-        "Open audio file",
+        "Open audio files",
+        "Import folder",
+        "Include subfolders",
         "Record",
         "Auto detect",
         "Names & keywords",
@@ -199,6 +202,7 @@ fn minimum_window_keeps_actions_settings_and_error_recovery_visible() {
         "Export .txt",
         "Clear",
         "Ctrl+Enter",
+        icons::QUEUE,
     ] {
         assert_visible(&output, label);
     }
@@ -466,4 +470,300 @@ fn live_append_follows_the_end_but_respects_scrolling_back() {
         (after - before).abs() < 4.0,
         "New text pulled the user away from the paragraph they were reading"
     );
+}
+
+fn import_files(harness: &mut Harness, names: &[&str]) {
+    harness
+        .app
+        .io_send
+        .send(IoEvent::Imported(ImportReport {
+            files: names.iter().map(PathBuf::from).collect(),
+            ..Default::default()
+        }))
+        .unwrap();
+    harness.frame(vec![]);
+    harness.frame(vec![]);
+}
+
+fn finish_file(harness: &mut Harness, cancelled: bool) {
+    harness
+        .events
+        .send(Event::Finished {
+            cancelled,
+            seconds: 2.0,
+            elapsed: 0.2,
+        })
+        .unwrap();
+    harness.frame(vec![]);
+}
+
+#[test]
+fn batch_queue_runs_in_order_with_headings_and_source_export_names() {
+    let mut harness = Harness::new(Vec2::new(1120.0, 760.0));
+    import_files(&mut harness, &["a.wav", "b.opus"]);
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("a.wav"))
+    );
+    assert!(harness.commands.try_recv().is_err());
+    harness
+        .events
+        .send(Event::Text(Transcript {
+            text: "First recording.".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    finish_file(&mut harness, false);
+    assert_eq!(harness.app.queue[0].status, QueueStatus::Done);
+    assert_eq!(harness.app.queue[1].status, QueueStatus::Active);
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("b.opus"))
+    );
+    harness
+        .events
+        .send(Event::Text(Transcript {
+            text: "Second recording.".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    finish_file(&mut harness, false);
+    assert_eq!(
+        harness.app.text,
+        "--- a.wav ---\nFirst recording.\n\n--- b.opus ---\nSecond recording."
+    );
+    assert_eq!(harness.app.export_name(), "transcripts.txt");
+    assert!(!harness.app.busy);
+    assert_visible(
+        &harness.frame(vec![]),
+        "2/2 completed · 0 waiting · 0 failed/cancelled",
+    );
+    // Clearing queue history does not clear the document.
+    harness.click("Clear finished");
+    assert!(harness.app.queue.is_empty());
+    assert!(harness.app.text.contains("First recording."));
+    assert_eq!(harness.app.export_name(), "transcripts.txt");
+    harness.app.clear();
+    assert_eq!(harness.app.export_name(), "transcript.txt");
+    harness.app.restore_clear();
+    assert_eq!(harness.app.export_name(), "transcripts.txt");
+
+    let mut single = Harness::new(Vec2::new(1120.0, 760.0));
+    import_files(&mut single, &["interview.part.one.MP3"]);
+    assert_eq!(single.app.export_name(), "interview.part.one.txt");
+    assert!(single.app.text.is_empty()); // Single imports keep the original plain transcript.
+    assert!(!single.app.show_queue);
+}
+
+#[test]
+fn queue_errors_continue_and_retry_appends_a_new_attempt() {
+    let mut harness = Harness::new(Vec2::new(1120.0, 760.0));
+    import_files(&mut harness, &["bad.wav", "good.wav"]);
+    harness.commands.try_recv().unwrap();
+    harness
+        .events
+        .send(Event::Text(Transcript {
+            text: "Partial text.".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    harness
+        .events
+        .send(Event::Error("Damaged audio packet".into()))
+        .unwrap();
+    let output = harness.frame(vec![]);
+    assert_eq!(
+        harness.app.queue[0].status,
+        QueueStatus::Failed("Damaged audio packet".into())
+    );
+    assert_visible(&output, "Damaged audio packet");
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("good.wav"))
+    );
+    finish_file(&mut harness, false);
+    harness.click("Retry failed");
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("bad.wav"))
+    );
+    assert!(harness.app.text.contains("Partial text."));
+    assert_eq!(harness.app.text.matches("--- bad.wav ---").count(), 2);
+    assert_eq!(harness.app.queue[0].status, QueueStatus::Active);
+}
+
+#[test]
+fn cancel_pauses_remaining_files_and_resume_and_skip_reach_the_worker() {
+    let mut harness = Harness::new(Vec2::new(1120.0, 760.0));
+    import_files(&mut harness, &["a.wav", "b.wav", "c.wav"]);
+    harness.commands.try_recv().unwrap();
+    harness.key(egui::Key::Enter, egui::Modifiers::CTRL);
+    assert!(harness.app.queue_paused);
+    finish_file(&mut harness, true);
+    assert_eq!(harness.app.queue[0].status, QueueStatus::Cancelled);
+    assert_eq!(harness.app.waiting_count(), 2);
+    assert!(harness.commands.try_recv().is_err());
+    harness.click("Resume queue");
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("b.wav"))
+    );
+    assert!(!harness.app.worker.stop.load(Ordering::Relaxed));
+    harness.click("Skip current");
+    assert!(harness.app.worker.stop.load(Ordering::Relaxed));
+    assert!(!harness.app.queue_paused);
+    finish_file(&mut harness, true);
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("c.wav"))
+    );
+    assert_eq!(harness.app.queue[1].status, QueueStatus::Cancelled);
+}
+
+#[test]
+fn pause_remove_and_clear_waiting_preserve_the_active_file() {
+    let mut harness = Harness::new(Vec2::new(820.0, 600.0));
+    import_files(&mut harness, &["a.wav", "b.wav", "c.wav"]);
+    harness.commands.try_recv().unwrap();
+    for label in [
+        "Import queue",
+        "Pause after file",
+        "Skip current",
+        "Clear waiting",
+        "Retry failed",
+        "Clear finished",
+        "Auto detect",
+        "Names & keywords",
+        "Names, terms, product names…",
+    ] {
+        assert_visible(&harness.frame(vec![]), label);
+    }
+    harness.app.show_queue = false;
+    let output = harness.frame(vec![]);
+    assert_visible(&output, icons::QUEUE);
+    assert_visible(&output, "2");
+    assert!(text_bounds(&output, icons::QUEUE).0.bottom() < 74.0);
+    harness.click(icons::QUEUE);
+    assert!(harness.app.show_queue);
+    harness.click(icons::QUEUE);
+    assert!(!harness.app.show_queue);
+    harness.click(icons::QUEUE);
+    assert!(harness.app.show_queue);
+    harness.app.dialog = true;
+    assert_visible(&harness.frame(vec![]), "Names, terms, product names…");
+    harness.app.dialog = false;
+    // Both waiting rows have Remove; the rendered text search selects the first one.
+    harness.click("Remove");
+    assert_eq!(harness.app.queue.len(), 2);
+    assert_eq!(harness.app.queue[1].path, PathBuf::from("c.wav"));
+    harness.click("Pause after file");
+    assert!(!harness.app.worker.stop.load(Ordering::Relaxed));
+    finish_file(&mut harness, false);
+    assert!(harness.commands.try_recv().is_err());
+    assert_eq!(harness.app.waiting_count(), 1);
+    harness.click("Clear waiting");
+    assert_eq!(harness.app.queue.len(), 1);
+    assert_eq!(harness.app.queue[0].status, QueueStatus::Done);
+}
+
+#[test]
+fn adding_files_during_transcription_deduplicates_and_does_not_interrupt() {
+    let mut harness = Harness::new(Vec2::new(1120.0, 760.0));
+    import_files(&mut harness, &["a.wav", "b.wav"]);
+    harness.commands.try_recv().unwrap();
+    import_files(&mut harness, &["a.wav", "b.wav", "c.wav"]);
+    assert_eq!(harness.app.queue.len(), 3);
+    assert_eq!(harness.app.waiting_count(), 2);
+    assert!(harness.commands.try_recv().is_err());
+    assert!(!harness.app.worker.stop.load(Ordering::Relaxed));
+    assert!(harness.app.import_summary.contains("2 already in queue"));
+    finish_file(&mut harness, false);
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("b.wav"))
+    );
+}
+
+#[test]
+fn transcript_limit_pauses_queue_without_losing_waiting_files() {
+    let mut harness = Harness::new(Vec2::new(1120.0, 760.0));
+    import_files(&mut harness, &["a.wav", "b.wav"]);
+    harness.commands.try_recv().unwrap();
+    // Exercise the event handler directly to avoid laying out 4 MB of synthetic text.
+    harness.app.text = "x".repeat(TEXT_LIMIT - 4);
+    harness
+        .events
+        .send(Event::Text(Transcript {
+            text: "Too much text.".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    harness
+        .events
+        .send(Event::Finished {
+            cancelled: false,
+            seconds: 2.0,
+            elapsed: 0.2,
+        })
+        .unwrap();
+    harness.app.events();
+    assert!(harness.app.queue_paused);
+    assert!(matches!(
+        harness.app.queue[0].status,
+        QueueStatus::Failed(_)
+    ));
+    assert_eq!(harness.app.waiting_count(), 1);
+    assert!(harness.commands.try_recv().is_err());
+    assert_eq!(harness.app.text.len(), TEXT_LIMIT - 4);
+    harness.app.clear();
+    harness.app.queue_paused = false;
+    harness.app.advance_queue();
+    assert!(
+        matches!(harness.commands.try_recv(), Ok(Command::File(path, _)) if path == std::path::Path::new("b.wav"))
+    );
+}
+
+#[test]
+fn every_dropped_file_and_folder_is_discovered_while_recording() {
+    #[derive(Debug)]
+    struct DroppedPath(PathBuf);
+    impl egui::DroppedFile for DroppedPath {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            unreachable!("Discovery only needs paths")
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("nested")).unwrap();
+    for name in ["a.wav", "b.opus", "nested/c.mp3"] {
+        std::fs::write(root.path().join(name), []).unwrap();
+    }
+    let mut harness = Harness::new(Vec2::new(1120.0, 760.0));
+    harness.app.include_subfolders = true;
+    harness.app.start(None);
+    harness.commands.try_recv().unwrap();
+    let ctx = harness.ctx.clone();
+    let _ = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, harness.size)),
+            dropped_files: vec![
+                Arc::new(DroppedPath(root.path().join("a.wav"))),
+                Arc::new(DroppedPath(root.path().into())),
+            ],
+            ..Default::default()
+        },
+        |_ui| harness.app.handle_input(&ctx),
+    );
+    assert!(harness.app.dialog);
+    let event = harness
+        .app
+        .io_receive
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    harness.app.io_send.send(event).unwrap();
+    harness.frame(vec![]);
+    assert_eq!(harness.app.queue.len(), 3);
+    assert_eq!(harness.app.waiting_count(), 3);
+    assert!(harness.app.listening);
+    assert!(harness.commands.try_recv().is_err());
+    finish_file(&mut harness, false);
+    assert!(matches!(
+        harness.commands.try_recv(),
+        Ok(Command::File(_, _))
+    ));
 }

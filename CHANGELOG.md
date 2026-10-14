@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — 2026-10-14
+
+- Moved the queue control into the header beside Shortcuts as an icon button, with a waiting-count badge, status tooltip, and accessible label.
+- Added folder import with optional subfolders, multiple-file selection, and importing every dropped file/folder or command-line source.
+- Added an in-memory sequential queue with per-file status/errors, progress, remove, skip, pause/resume, clear waiting/finished, and retry failed/cancelled files. Files can be added while transcribing or recording.
+- Discover audio off the UI thread, sort folder entries, deduplicate overlapping selections, skip folder links, and report unreadable paths and import/queue limits.
+- Added batch filename headings, source-based export filenames, and Ctrl+Shift+O for folder import. Cancellation and transcript limits pause remaining work; individual file failures continue to the next item.
+- Kept source and recognition controls visible in compact windows and added discovery, queue, drop, recovery, export-name, and command-line regression coverage.
+
 ## 0.1.3 — 2026-10-14
 
 - Added offline OGG/Opus voice-note import with a bundled decoder, including .opus files in the file picker.

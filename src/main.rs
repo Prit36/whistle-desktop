@@ -2,10 +2,7 @@
 mod ui;
 
 fn main() -> eframe::Result {
-    let initial_file = std::env::args_os()
-        .nth(1)
-        .filter(|s| s != "--screenshot")
-        .map(std::path::PathBuf::from);
+    let initial_files = source_arguments(std::env::args_os().skip(1));
     let screenshot = std::env::args_os()
         .skip_while(|s| s != "--screenshot")
         .nth(1)
@@ -35,8 +32,43 @@ fn main() -> eframe::Result {
             Ok(Box::new(ui::WhistleApp::new(
                 &cc.egui_ctx,
                 screenshot,
-                initial_file,
+                initial_files,
             )))
         }),
     )
+}
+
+fn source_arguments(args: impl Iterator<Item = std::ffi::OsString>) -> Vec<std::path::PathBuf> {
+    let mut args = args;
+    let mut sources = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--screenshot" || arg == "--screenshot-size" {
+            args.next();
+        } else {
+            sources.push(arg.into());
+        }
+    }
+    sources
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::*;
+
+    #[test]
+    fn collects_all_sources_and_excludes_capture_options() {
+        let args = [
+            "folder",
+            "a.wav",
+            "--screenshot",
+            "capture.png",
+            "--screenshot-size",
+            "820x600",
+            "b.opus",
+        ];
+        assert_eq!(
+            source_arguments(args.into_iter().map(Into::into)),
+            ["folder", "a.wav", "b.opus"].map(std::path::PathBuf::from)
+        );
+    }
 }

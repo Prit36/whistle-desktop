@@ -2,7 +2,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Prit36/whistle-desktop)](https://github.com/Prit36/whistle-desktop/releases/latest)
 
-A native Rust app for private, offline speech to text. Import or drop an MP3, WAV, FLAC, OGG (Vorbis or Opus), .opus, M4A/AAC or AAC recording, or use your default microphone. Edit confirmed words, copy the transcript, undo clearing it, and export UTF-8 text.
+A native Rust app for private, offline speech to text. Import or drop recordings and folders of MP3, WAV, FLAC, OGG (Vorbis or Opus), .opus, M4A/AAC or AAC audio, or use your default microphone. Queue multiple files, edit confirmed words, copy the transcript, undo clearing it, and export UTF-8 text.
 
 In the portable bundle, double-click `Whistle.exe`. In this source checkout, the release is in `dist/Whistle/Whistle.exe`, or launch it through `START-WHISTLE.cmd` after packaging. Keep the adjacent `runtime` directory with the executable. A prepared bundle needs **no internet, API key, Python, FFmpeg or model download** to run.
 
@@ -29,28 +29,31 @@ Setup uses Python's standard library only. It downloads a pinned Whistle model a
 python scripts/package.py --skip-downloads
 ```
 
-This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.1.3-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
+This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.2.0-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
 
 ## Use
 
-- **Open audio file** or drop a recording onto the window. A new source appends below existing text.
+- **Open audio files** selects one or several recordings. **Import folder** adds supported audio in alphabetical path order; enable **Include subfolders** first to scan nested folders. You can also drop multiple recordings or folders, including while another source is running. New sources append below existing text, with filename headings for batch imports.
+- The **queue icon beside Shortcuts in the header** opens **Import queue**, showing progress and each file's status. Its badge shows waiting files; hover for queue status. Remove a waiting file, **Clear waiting**, **Skip current**, or **Pause after file** and **Resume queue**. Cancelling transcription pauses remaining work and preserves confirmed text. An unreadable or damaged file keeps its error in the queue and the next file continues. **Retry failed** retries failed/cancelled files, appending fresh attempts below any partial text; resume first if the queue is paused.
+- Imports skip unsupported files and folder links, and deduplicate paths already in the queue. Discovery runs in the background and is limited to 1,000 files and 100,000 folder entries per import; the queue holds at most 1,000 entries including finished files. Use **Clear finished** to free queue space or reimport completed files. **Import details** reports unreadable paths and limits. The queue stays in memory for this session.
 - **Record microphone** captures your OS default input device. Phrases become editable after pauses (about 500 ms of quiet). Continuous speech is split into segments of at most six seconds, followed by inference time. **Stop recording** drains captured audio and transcribes the final phrase.
 - Choose automatic language detection or English, German, French, Spanish, Italian, Dutch, or Polish. Whistle currently supports these seven languages; Hindi is not supported by this model.
 - Add names and keywords separated by commas or newlines before starting a source.
 - Audio controls show their shortcuts. Click the keyboard icon in the header for the complete shortcut reference. In narrow windows, **Record microphone** is labeled **Record**.
-- Click the transcript to edit or select text. **Copy text** copies confirmed, edited text. **Export .txt** saves a snapshot through Fastframe's atomic file writer.
+- Click the transcript to edit or select text. **Copy text** copies confirmed, edited text. **Export .txt** saves a snapshot through Fastframe's atomic file writer, suggesting the recording's filename or `transcripts.txt` for multiple sources.
 - **Clear** has an **Undo clear** action. Audio and transcript stay in memory until you export text or close the app.
 
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+O | Open audio |
-| Ctrl+Enter | Start microphone / stop current job |
+| Ctrl+Shift+O | Import folder |
+| Ctrl+Enter | Start microphone / stop current job / resume waiting queue |
 | Ctrl+Shift+C | Copy entire transcript |
 | Ctrl+S | Export text |
 | F6 | Focus transcript |
 | Ctrl+C / Ctrl+V / Ctrl+Z | Normal editor selection, paste and undo |
 
-You can also open a file from the command line: `Whistle.exe recording.mp3`. Set `WHISTLE_RUNTIME_DIR` to an explicit runtime directory if needed.
+You can also open files or folders from the command line: `Whistle.exe recording.mp3 "meeting recordings" voice-note.opus`. Command-line folders include their direct audio files. Set `WHISTLE_RUNTIME_DIR` to an explicit runtime directory if needed.
 
 ## Performance design
 

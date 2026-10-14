@@ -1,5 +1,14 @@
 # Whistle Desktop implementation plan
 
+## Quality-of-life improvements — 14 October 2026
+
+Implemented. Discovery, queue controls, batch transcripts, export names, and command-line sources are covered by the ordinary test suite. Strict Clippy and native inference passed; native captures verified the compact layout and a mixed-success folder import. The usage guide and changelog describe the behavior and limits.
+
+- Import multiple audio files or a folder, optionally including subfolders. Discover files off the UI thread, sort folders deterministically, filter supported extensions, and deduplicate overlapping imports. Bound discovery and report unreadable paths or limits.
+- Queue files on the existing single inference worker. Show each file's status and errors, allow removing waiting files, skipping the current file, pausing/resuming, clearing waiting files, and retrying failures. Cancellation preserves confirmed text and pauses remaining work; an individual decode error does not discard the batch.
+- Accept every dropped file/folder and command-line source. Label batch transcript sections with filenames and suggest a source-based export filename. Keep the existing single-file and microphone editing behavior.
+- Verify discovery, queue transitions, recovery, text limits, keyboard input, and minimum-window layout with model-independent tests; run formatting, strict Clippy, native integration, a release build, and native render captures.
+
 1. Verify the current Whistle ABI, redistributable runtime, model and Fastframe revisions.
 2. Build a native Rust application with Fastframe fonts/text/file helpers and egui/eframe. Use the Fastframe-maintained egui/winit revisions together.
 3. Load the native Whistle library once on a dedicated worker. Memory-map the model. Keep every call to the process-global, non-thread-safe C API on that worker.

@@ -51,7 +51,7 @@ impl WhistleApp {
         self.drop_overlay(ui, ctx, document);
     }
 
-    fn header(&self, ui: &mut egui::Ui) {
+    fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             ui.label(icon(icons::WAVEFORM, 32.0, ACCENT));
@@ -94,7 +94,8 @@ impl WhistleApp {
                         .show(ui, |ui| {
                             for (action, shortcut) in [
                                 ("Open audio", "Ctrl+O"),
-                                ("Record / stop", "Ctrl+Enter"),
+                                ("Import folder", "Ctrl+Shift+O"),
+                                ("Record / stop / resume queue", "Ctrl+Enter"),
                                 ("Copy transcript", "Ctrl+Shift+C"),
                                 ("Export text", "Ctrl+S"),
                                 ("Undo editing", "Ctrl+Z"),
@@ -106,29 +107,98 @@ impl WhistleApp {
                             }
                         });
                 });
+                self.queue_button(ui);
             });
         });
     }
 
+    fn queue_button(&mut self, ui: &mut egui::Ui) {
+        let waiting = self.waiting_count();
+        let active = self
+            .queue
+            .iter()
+            .any(|entry| entry.status == QueueStatus::Active);
+        let color = if active || waiting > 0 || self.show_queue {
+            ACCENT
+        } else {
+            MUTED
+        };
+        let status = if self.queue_paused && waiting > 0 {
+            format!("Paused · {waiting} waiting")
+        } else if active {
+            format!("Transcribing · {waiting} waiting")
+        } else if waiting > 0 {
+            format!("{waiting} waiting")
+        } else if self.queue.is_empty() {
+            "No files queued".into()
+        } else {
+            "No files waiting · view results".into()
+        };
+        let response = ui
+            .add(
+                egui::Button::new(icon(icons::QUEUE, 20.0, color))
+                    .frame(false)
+                    .min_size(Vec2::splat(34.0)),
+            )
+            .on_hover_text(format!("Import queue\n{status}"));
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Import queue")
+        });
+        if waiting > 0 {
+            let label = if waiting > 99 {
+                "99+".into()
+            } else {
+                waiting.to_string()
+            };
+            let text = ui
+                .painter()
+                .layout_no_wrap(label, Weight::SemiBold.font_id(9.0), BG);
+            let size = text.size() + Vec2::new(7.0, 3.0);
+            let badge = Rect::from_min_size(
+                egui::pos2(response.rect.right() - size.x + 2.0, response.rect.top()),
+                size,
+            );
+            ui.painter().rect_filled(badge, 8, ACCENT);
+            ui.painter()
+                .galley(badge.center() - text.size() / 2.0, text, BG);
+        }
+        if response.clicked() {
+            self.show_queue = !self.show_queue;
+        }
+    }
+
     fn controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.spacing_mut().item_spacing.y = 8.0;
+        let compact = ui.available_width() < 228.0;
+        ui.spacing_mut().item_spacing.y = if compact { 6.0 } else { 8.0 };
         eyebrow(ui, "01  /  AUDIO SOURCE");
         ui.add_space(8.0);
-        let enabled = self.ready && !self.busy && !self.dialog;
+        let enabled = self.ready && !self.dialog;
         let width = ui.available_width();
         if source_button(
             ui,
             enabled,
             icons::UPLOAD,
-            "Open audio file",
+            "Open audio files",
             true,
             "Ctrl+O",
         )
-        .on_hover_text("Open or drop MP3, WAV, FLAC, OGG, M4A, or AAC")
+        .on_hover_text("Select multiple MP3, WAV, FLAC, OGG, Opus, M4A, or AAC files. You can add files while transcribing.")
         .clicked()
         {
-            self.pick(ctx);
+            self.pick(ctx, false);
         }
+        if source_button(ui, enabled, icons::FOLDER, "Import folder", false, "")
+            .on_hover_text("Ctrl+Shift+O · Add supported audio from a folder")
+            .clicked()
+        {
+            self.pick(ctx, true);
+        }
+        ui.add_enabled_ui(!self.dialog, |ui| {
+            ui.checkbox(&mut self.include_subfolders, "Include subfolders")
+                .on_hover_text(
+                    "Applies to folder imports and dropped folders. Folder links are skipped.",
+                );
+        });
         if self.busy {
             let label = if self.stopping {
                 "Finishing…"
@@ -146,23 +216,56 @@ impl WhistleApp {
                 widgets.hovered.weak_bg_fill = Color32::from_rgb(78, 40, 45);
                 widgets.hovered.bg_stroke = Stroke::new(1.0, DANGER);
                 if source_button(ui, !self.stopping, icons::STOP, label, false, "Ctrl+Enter")
+                    .on_hover_text(if self.listening {
+                        "Stop and transcribe the final phrase"
+                    } else {
+                        "Cancel the current file and pause the remaining queue"
+                    })
                     .clicked()
                 {
                     self.stop();
                 }
             });
+        } else if self.waiting_count() > 0 {
+            if source_button(
+                ui,
+                enabled,
+                icons::WAVEFORM,
+                "Resume queue",
+                false,
+                "Ctrl+Enter",
+            )
+            .clicked()
+            {
+                self.queue_paused = false;
+                self.advance_queue();
+            }
         } else {
             let label = if width < 228.0 {
                 "Record"
             } else {
                 "Record microphone"
             };
-            if source_button(ui, enabled, icons::MICROPHONE, label, false, "Ctrl+Enter")
-                .on_hover_text("Record from your default microphone")
-                .clicked()
+            if source_button(
+                ui,
+                enabled && self.waiting_count() == 0,
+                icons::MICROPHONE,
+                label,
+                false,
+                "Ctrl+Enter",
+            )
+            .on_hover_text("Record from your default microphone")
+            .clicked()
             {
                 self.start(None);
             }
+        }
+        if self.dialog {
+            ui.label(
+                RichText::new("File dialog / reading files…")
+                    .size(12.0)
+                    .color(MUTED),
+            );
         }
         if self.busy && self.listening {
             let level = f32::from_bits(self.worker.capture.level.load(Ordering::Relaxed));
@@ -172,9 +275,9 @@ impl WhistleApp {
                     .desired_height(4.0),
             );
         }
-        ui.add_space(20.0);
+        ui.add_space(6.0);
         ui.separator();
-        ui.add_space(14.0);
+        ui.add_space(4.0);
         eyebrow(ui, "02  /  RECOGNITION");
         ui.add_space(6.0);
         ui.add_enabled_ui(!self.busy, |ui| {
@@ -197,12 +300,13 @@ impl WhistleApp {
                         }
                     });
             });
-            ui.add_space(10.0);
+            ui.add_space(4.0);
             ui.label(RichText::new("Names & keywords").font(Weight::Medium.font_id(13.0)));
             ui.add_sized(
-                [ui.available_width(), 88.0],
+                [ui.available_width(), 60.0],
                 egui::TextEdit::multiline(&mut self.keywords)
                     .id(egui::Id::new("keywords"))
+                    .desired_rows(2)
                     .lock_focus(false)
                     .hint_text("Names, terms, product names…")
                     .desired_width(f32::INFINITY)
@@ -371,6 +475,9 @@ impl WhistleApp {
                 );
                 if response.changed() {
                     self.undo_clear = None;
+                    if self.text.is_empty() {
+                        self.transcript_sources = 0;
+                    }
                     self.recount();
                 }
             });
@@ -523,8 +630,8 @@ impl WhistleApp {
             painter.text(
                 document.center(),
                 egui::Align2::CENTER_CENTER,
-                if self.ready && !self.busy && !self.dialog {
-                    "Drop audio to transcribe"
+                if self.ready && !self.dialog {
+                    "Drop audio files or folders to add to queue"
                 } else {
                     "Finish the current task first"
                 },
