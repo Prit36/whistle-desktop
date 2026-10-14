@@ -6,6 +6,7 @@ use rubato::{
     WindowFunction,
 };
 use std::{
+    io::{Read, Seek, SeekFrom},
     path::Path,
     sync::{
         Arc,
@@ -13,9 +14,14 @@ use std::{
     },
 };
 use symphonia::core::{
-    codecs::audio::AudioDecoderOptions,
-    formats::{FormatOptions, TrackType, probe::Hint},
-    io::MediaSourceStream,
+    checksum::Crc32,
+    codecs::{
+        audio::{AudioDecoderOptions, well_known::CODEC_ID_OPUS},
+        registry::CodecRegistry,
+    },
+    errors::Error as DecodeError,
+    formats::{FormatOptions, TrackType, probe::Hint, well_known::FORMAT_ID_OGG},
+    io::{MediaSourceStream, Monitor},
     meta::MetadataOptions,
 };
 
@@ -143,6 +149,47 @@ pub struct DecodeSummary {
     pub cancelled: bool,
 }
 
+/// Some voice-note writers omit the OGG end marker. Only accept EOF when the
+/// final page is intact, belongs to this stream, and ends on a packet boundary.
+/// Reading at most one maximum-size page keeps this check bounded.
+fn ogg_ends_on_complete_packet(path: &Path, serial: u32) -> std::io::Result<bool> {
+    const MAX_PAGE: u64 = 27 + 255 + 255 * 255;
+    let mut file = std::fs::File::open(path)?;
+    let length = file.metadata()?.len();
+    let tail_length = length.min(MAX_PAGE);
+    file.seek(SeekFrom::Start(length - tail_length))?;
+    let mut tail = vec![0; tail_length as usize];
+    file.read_exact(&mut tail)?;
+    for offset in (0..tail.len().saturating_sub(26)).rev() {
+        let page = &tail[offset..];
+        if &page[..4] != b"OggS" || page[4] != 0 || page[5] & !1 != 0 {
+            continue;
+        }
+        if page[14..18] != serial.to_le_bytes() || page[6..14] == [0xff; 8] {
+            continue;
+        }
+        let header_length = 27 + page[26] as usize;
+        let Some(segments) = page.get(27..header_length) else {
+            continue;
+        };
+        if segments.is_empty() || segments.last() == Some(&255) {
+            continue;
+        }
+        let body_length: usize = segments.iter().map(|&n| n as usize).sum();
+        if header_length + body_length != page.len() {
+            continue;
+        }
+        let mut crc = Crc32::new(0);
+        crc.process_buf_bytes(&page[..22]);
+        crc.process_buf_bytes(&[0; 4]);
+        crc.process_buf_bytes(&page[26..]);
+        if page[22..26] == crc.crc().to_le_bytes() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Packet-by-packet decode; neither compressed audio nor decoded PCM is retained.
 pub fn decode_file(
     path: &Path,
@@ -172,19 +219,35 @@ pub fn decode_file(
         .as_ref()
         .and_then(|p| p.audio())
         .context("Missing audio codec parameters")?;
-    let mut decoder = symphonia::default::get_codecs()
-        .make_audio_decoder(parameters, &AudioDecoderOptions::default())?;
+    let ogg_opus = parameters.codec == CODEC_ID_OPUS
+        && format.format_info().format == FORMAT_ID_OGG
+        && format.tracks().len() == 1;
+    // OGG can contain Opus voice notes as well as Vorbis. Symphonia demuxes
+    // both, but Opus needs an explicitly registered, statically bundled decoder.
+    let mut codecs = CodecRegistry::new();
+    symphonia::default::register_enabled_codecs(&mut codecs);
+    codecs.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
+    let mut decoder = codecs
+        .make_audio_decoder(parameters, &AudioDecoderOptions::default())
+        .context("The file's audio codec is unsupported")?;
     let mut converter: Option<MonoResampler> = None;
     let mut rate = 0;
     let mut frames = 0u64;
     let mut interleaved = Vec::<f32>::new();
     let mut mono = Vec::<f32>::new();
     while !cancel.load(Ordering::Relaxed) {
-        let Some(packet) = format
-            .next_packet()
-            .context("Could not read audio packet")?
-        else {
-            break;
+        let packet = match format.next_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(DecodeError::IoError(ref error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof
+                    && ogg_opus
+                    && frames > 0
+                    && ogg_ends_on_complete_packet(path, id).unwrap_or(false) =>
+            {
+                break;
+            }
+            Err(error) => return Err(error).context("Could not read audio packet"),
         };
         if packet.track_id != id {
             continue;

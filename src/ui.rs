@@ -287,7 +287,10 @@ impl WhistleApp {
         std::thread::spawn(move || {
             let path = rfd::FileDialog::new()
                 .set_title("Open audio")
-                .add_filter("Audio", &["mp3", "wav", "flac", "ogg", "m4a", "aac"])
+                .add_filter(
+                    "Audio",
+                    &["mp3", "wav", "flac", "ogg", "opus", "m4a", "aac"],
+                )
                 .pick_file();
             let _ = sender.send(IoEvent::Picked(path));
             ctx.request_repaint();

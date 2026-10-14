@@ -41,3 +41,11 @@ The Windows portable bundle includes the pinned model and native runtime, and ru
 Seven model-independent UI tests now drive the actual egui widgets with keyboard, pointer, scroll, and worker events. They cover editing/copy/clear/restore; recognition and microphone controls; minimum-size and long-error visibility; Tab/Shift+Tab, F6 and recording shortcuts; processing/cancellation/error recovery; and live text following that respects the user's scroll position, including the final phrase arriving together with completion.
 
 A 1,000-paragraph synthetic transcript exercises Ctrl+End navigation, editing at the end, undo, full-transcript copy, and editor scrolling. This checks editing behavior rather than speech-recognition accuracy. Real MP3 import and native OpenGL capture are also checked for the updated interface. The ordinary suite has 15 tests, plus the separately run native integration test. Physical microphone and OS dialog/clipboard limitations above still apply.
+
+## Opus import — 14 October 2026
+
+Added a statically bundled libopus decoder alongside Symphonia's existing codecs. The ordinary suite now has 20 tests, plus the separately run native integration test. Synthetic tone fixtures cover mono OGG and .opus imports, stereo downmixing, a short clip with an original 16 kHz input rate, exact decoded/resampled lengths, cancellation before and during decoding, and propagation of consumer errors. These tests require neither FFmpeg nor the model.
+
+Some voice notes have complete OGG pages but omit the end-of-stream marker. At an unexpected EOF, the Opus path accepts this case only for a single-stream OGG whose final page has the matching stream serial, a valid CRC, and a complete final packet. The check reads at most 65,307 bytes. Regression tests verify identical PCM with and without the marker and reject truncated page bodies, partial following headers, incomplete packets, and invalid final-page checksums.
+
+A locally supplied mono Opus recording reproduced the original unsupported-codec error, then completed local decoding and transcription of all 58.294 seconds after the fix. Its audio and transcript are not included in the repository. Formatting, strict Clippy, all 20 ordinary tests, and the native integration test passed.

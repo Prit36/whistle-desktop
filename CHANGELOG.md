@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 — 2026-10-14
+
+- Added offline OGG/Opus voice-note import with a bundled decoder, including .opus files in the file picker.
+- Accept Opus voice notes missing the OGG end marker when the final page and packet are complete and the page checksum is valid.
+- Added five Opus regression tests covering mono/stereo audio, short clips, cancellation, consumer errors, exact sample counts, and damaged final pages.
+
 ## 0.1.2 — 2026-10-14
 
 - Refined the original dark interface with restrained mint accents, polished typography, brighter secondary text, and clearer input boundaries.

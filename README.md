@@ -2,7 +2,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Prit36/whistle-desktop)](https://github.com/Prit36/whistle-desktop/releases/latest)
 
-A native Rust app for private, offline speech to text. Import or drop an MP3, WAV, FLAC, OGG/Vorbis, M4A/AAC or AAC recording, or use your default microphone. Edit confirmed words, copy the transcript, undo clearing it, and export UTF-8 text.
+A native Rust app for private, offline speech to text. Import or drop an MP3, WAV, FLAC, OGG (Vorbis or Opus), .opus, M4A/AAC or AAC recording, or use your default microphone. Edit confirmed words, copy the transcript, undo clearing it, and export UTF-8 text.
 
 In the portable bundle, double-click `Whistle.exe`. In this source checkout, the release is in `dist/Whistle/Whistle.exe`, or launch it through `START-WHISTLE.cmd` after packaging. Keep the adjacent `runtime` directory with the executable. A prepared bundle needs **no internet, API key, Python, FFmpeg or model download** to run.
 
@@ -14,7 +14,7 @@ This is an independent desktop client, not an official Cactus Compute product. L
 
 ## Build and run
 
-Requires Rust 1.98.1 (pinned in `rust-toolchain.toml`), Python 3.11+ for setup/packaging, and the native toolchain for your OS. On Windows, use the MSVC Rust toolchain with Visual Studio C++ Build Tools. Linux also requires ALSA development headers, a C compiler, and a desktop with OpenGL and a file-dialog portal. macOS requires the Xcode command-line tools.
+Requires Rust 1.98.1 (pinned in `rust-toolchain.toml`), Python 3.11+ for setup/packaging, CMake (to build the bundled Opus decoder), and the native toolchain for your OS. On Windows, use the MSVC Rust toolchain with Visual Studio C++ Build Tools, including its CMake tools. Linux also requires ALSA development headers, a C compiler, and a desktop with OpenGL and a file-dialog portal. macOS requires the Xcode command-line tools.
 
 ```powershell
 git clone https://github.com/Prit36/whistle-desktop.git
@@ -29,7 +29,7 @@ Setup uses Python's standard library only. It downloads a pinned Whistle model a
 python scripts/package.py --skip-downloads
 ```
 
-This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.1.2-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
+This builds both executables, copies the approved runtime and host dependency notices, and writes `dist/Whistle-0.1.3-windows-x64.zip` and `dist/SHA256SUMS.txt`. Omit `--skip-downloads` to prepare the runtime first. Build tooling may fetch uncached Cargo dependencies; the packaged application runs offline. Dependencies are locked in `Cargo.lock`; Fastframe and its recommended egui/winit forks are pinned together. Public releases are built and published manually through GitHub CLI from a clean tagged checkout; see [RELEASING.md](RELEASING.md).
 
 ## Use
 
@@ -58,7 +58,7 @@ You can also open a file from the command line: `Whistle.exe recording.mp3`. Set
 - Incoming text follows the bottom of the editor during transcription until you scroll back or focus the editor to edit. Tab and Shift+Tab move between controls; F6 focuses the transcript.
 - A single inference worker owns the native, process-global Whistle C API. The Rust wrapper enforces exclusive engine ownership and is neither `Send` nor `Sync`.
 - The model loads once from a read-only memory map. A fixed JSON output buffer is reused.
-- Symphonia decodes files packet by packet. A persistent Rubato SIMD sinc resampler converts mixed mono audio to 16 kHz, removes startup delay and flushes the exact final sample count.
+- Symphonia decodes files packet by packet, with statically bundled libopus for Opus voice notes. A persistent Rubato SIMD sinc resampler converts mixed mono audio to 16 kHz, removes startup delay and flushes the exact final sample count.
 - File inference uses at most 12 seconds of PCM (768 KB), split at pauses or the quietest boundary in the final second. Each sample is transcribed once; there is no overlap that could duplicate text at a seam. Audio continuity is tested independently of the model's recognition accuracy.
 - Live capture downmixes into a lock-free, fixed-size SPSC ring. The callback allocates nothing, takes no locks and performs no inference. Resampling and pause-aware transcription run on the worker. Live phrases hold at most six seconds of PCM (384 KB). The ring holds 10 seconds at the microphone's native rate; overrun stops capture with an explicit error.
 - Worker notifications are bounded to eight events. The UI repaints on changes; the live level meter updates at 20 Hz. No idle animation loop.
